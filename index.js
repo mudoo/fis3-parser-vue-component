@@ -3,7 +3,7 @@ var parse5 = require('parse5');
 var validateTemplate = require('vue-template-validator');
 var deindent = require('de-indent');
 var objectAssign = require('object-assign');
-var vueComponentNum = 0;
+var hashSum = require('hash-sum');
 
 function getAttribute(node, name) {
   if (node.attrs) {
@@ -28,17 +28,23 @@ module.exports = function(content, file, conf) {
   configs = objectAssign({
     moduleIDFlag: '__module__',
     cssScopedFlag: '__vuec__',
-    cssScopedIdPrefix: '__vuec__'
+    cssScopedIdPrefix: '_v-',
+    cssScopedHashType: 'sum',
+    cssScopedHashLength: 8,
+    styleNameJoin: ''
   }, conf);
 
   // 兼容content为buffer的情况
   content = content.toString();
 
   // scope replace
-  vueComponentNum++;
-  vuecId = configs.cssScopedIdPrefix + vueComponentNum;
+  if (configs.cssScopedType == 'sum') {
+    vuecId = configs.cssScopedIdPrefix + hashSum(file.subpath);
+  } else {
+    vuecId = configs.cssScopedIdPrefix + fis.util.md5(file.subpath, configs.cssScopedHashLength);
+  }
   moduleID = getModuleID();
-  content = replaceFlag(content);
+  content = replaceScopedFlag(content);
 
   // get moduleId
   function getModuleID() {
@@ -48,9 +54,9 @@ module.exports = function(content, file, conf) {
     }
     return id;
   }
-
-  // replace flags
-  function replaceFlag(str) {
+  
+  // replace scoped flag
+  function replaceScopedFlag(str) {
     var reg = new RegExp('([^a-zA-Z0-9\-_])(' + configs.cssScopedFlag + '|'+ configs.moduleIDFlag +')([^a-zA-Z0-9\-_])', 'g');
     str = str.replace(reg, function($0, $1, $2, $3) {
       var repTxt = '';
@@ -99,6 +105,8 @@ module.exports = function(content, file, conf) {
 
     if (type == 'template') {
       content = parse5.serialize(node.content);
+      // 过滤模板中的换行、缩进
+      content = content.replace(/(\t| )+/g, '$1');
     } else {
       content = parse5.serialize(node);
     }
@@ -140,9 +148,10 @@ module.exports = function(content, file, conf) {
       console.log(msg)
     })
 
-    scriptStr += '\nvar _vueTemplateString = ' + JSON.stringify(templateContent) + ';\n'
-    scriptStr += '\nmodule && module.exports && (module.exports.template = _vueTemplateString);\n';
-    scriptStr += '\nexports && exports.default && (exports.default.template = _vueTemplateString);\n';
+    scriptStr += '\n;\n(function(template){\n'
+    scriptStr += '\nmodule && module.exports && (module.exports.template = template);\n';
+    scriptStr += '\nexports && exports.default && (exports.default.template = template);\n';
+    scriptStr += '\n})(' + JSON.stringify(templateContent) + ');\n';
   } else {
     scriptStr += '\nmodule && module.exports && (module.exports.template = "");\n';
     scriptStr += '\nexports && exports.default && (exports.default.template = "");\n';
@@ -160,9 +169,15 @@ module.exports = function(content, file, conf) {
   // style
   output['style'].forEach(function(item, index) {
     if (item.content) {
-      var styleFileName = file.realpathNoExt + '-vue-style-' + index + '.css';
-      var styleFile = fis.file.wrap(styleFileName);
-      var styleContent;
+      var styleFileName, styleFile, styleContent;
+
+      if (output['style'].length == 1) {
+        styleFileName = file.realpathNoExt + configs.styleNameJoin + '.css';
+      } else {
+        styleFileName = file.realpathNoExt + configs.styleNameJoin + '-' + index + '.css';
+      }
+
+      styleFile = fis.file.wrap(styleFileName);
 
       // css也采用片段编译，更好的支持less、sass等其他语言
       styleContent = fis.compile.partial(item.content, file, {
@@ -183,7 +198,7 @@ module.exports = function(content, file, conf) {
   });
 
   // 处理一遍scoped css
-  scriptStr = replaceFlag(scriptStr);
+  scriptStr = replaceScopedFlag(scriptStr);
 
   return scriptStr;
 };
